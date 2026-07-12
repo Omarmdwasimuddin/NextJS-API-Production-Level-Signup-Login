@@ -113,6 +113,85 @@ export const env = envSchema.parse(process.env);
 ```
 ---
 
+### lib/auth/password.ts
+```bash
+import { hash, verify } from "@node-rs/argon2";
+
+const ARGON2_OPTIONS = {
+  algorithm: 2,
+  memoryCost: 19456,
+  timeCost: 2,
+  parallelism: 1,
+  outputLen: 32,
+};
+
+export async function hashPassword(password: string) {
+  return hash(password, ARGON2_OPTIONS);
+}
+
+export async function verifyPassword(
+  hashValue: string,
+  password: string
+) {
+  return verify(hashValue, password);
+}
+```
+---
+
+### lib/auth/tokens.ts
+```bash
+import { SignJWT, jwtVerify } from "jose";
+import { createHmac, randomBytes, randomUUID } from "crypto";
+import { env } from "@/lib/validations/env";
+
+const ACCESS_KEY = new TextEncoder().encode(env.JWT_ACCESS_SECRET);
+const REFRESH_HMAC_KEY = env.REFRESH_HMAC_SECRET!;
+
+export async function signAccessToken(userId: string, role: string) {
+  return new SignJWT({ role })
+    .setSubject(userId)
+    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+    .setIssuedAt()
+    .setIssuer(env.APP_URL)
+    .setAudience("easy-shop")
+    .setExpirationTime("15m")
+    .setJti(randomUUID())
+    .sign(ACCESS_KEY);
+}
+
+export async function verifyAccessToken(token: string) {
+  const { payload } = await jwtVerify(token, ACCESS_KEY, {
+    issuer: env.APP_URL,
+    audience: "easy-shop",
+  });
+  return payload; // { sub: userId, role }
+}
+
+// Refresh token: opaque random string, not JWT — safer, easy to revoke via DB
+export function generateRefreshToken() {
+  const raw = randomBytes(48).toString("hex");
+  const hashed = createHmac("sha256", REFRESH_HMAC_KEY).update(raw).digest("hex");
+  return { raw, hashed };
+}
+
+export function hashRefreshToken(raw: string) {
+  return createHmac("sha256", REFRESH_HMAC_KEY).update(raw).digest("hex");
+}
+```
+---
+
+###
+```bash
+
+```
+---
+
+###
+```bash
+
+```
+---
+
 ###
 ```bash
 
