@@ -479,9 +479,96 @@ export async function proxy(request:NextRequest){
 ```
 ---
 
-###
+### app/api/auth/refresh/route.ts
 ```bash
+import { NextRequest, NextResponse } from "next/server";
+import  prisma  from "@/lib/prisma";
+import { signAccessToken, generateRefreshToken, hashRefreshToken } from "@/lib/auth/tokens";
+import { log } from "@/lib/logger";
 
+export async function POST(request: NextRequest) {
+    const requestId = crypto.randomUUID();
+
+  const rawRefresh = request.cookies.get("refresh_token")?.value;
+
+  if (!rawRefresh) {
+    log.warn(
+        {
+            requestId,
+        },
+        ""
+    )
+    return NextResponse.json(
+        { status: "fail", requestId, message: "" }, 
+        { status: 401 }
+    );
+  }
+
+  const tokenHash = hashRefreshToken(rawRefresh);
+
+  const stored = await prisma.refreshToken.findUnique({
+    where: { tokenHash },
+    include: { user: true },
+  });
+
+  if (!stored || stored.revokedAt || stored.expiresAt < new Date()) {
+    log.warn(
+        {
+            requestId,
+        },
+        "Session expired"
+    )
+    return NextResponse.json(
+        { status: "fail", message: "Session expired" }, 
+        { status: 401 }
+    );
+  }
+
+  // rotate: revoke old, issue new — prevents replay if token was stolen
+  const { raw: newRaw, hashed: newHashed } = generateRefreshToken();
+
+  await prisma.$transaction([
+    prisma.refreshToken.update({ 
+        where: { id: stored.id }, 
+        data: { revokedAt: new Date() }
+     }),
+
+    prisma.refreshToken.create({
+      data: {
+        tokenHash: newHashed,
+        userId: stored.userId,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      },
+    }),
+  ]);
+
+  const newAccess = await signAccessToken(stored.userId, stored.user.role);
+
+  log.info(
+    {
+        requestId,
+    },
+    "success"
+  )
+
+  const response = NextResponse.json({ status: "success" });
+
+  response.cookies.set("access_token", newAccess, {
+    httpOnly: true, 
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax", 
+    path: "/", maxAge: 60 * 15,
+  });
+  response.cookies.set("refresh_token", newRaw, {
+    httpOnly: true, 
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax", 
+    path: "/api/auth", 
+    maxAge: 60 * 60 * 24 * 7,
+  });
+
+  return response;
+}
 ```
 ---
 
