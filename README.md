@@ -74,9 +74,23 @@ export type LoginUserInput = z.infer<typeof loginSchema>;
 ```
 ---
 
-###
+### lib/validations/env.ts
 ```bash
+import { z } from "zod";
 
+
+export const envSchema = z.object({
+
+    DATABASE_URL: z.string().url(),
+    DIRECT_URL: z.string().url(),
+    JWT_ACCESS_SECRET: z.string().min(32),
+    REFRESH_HMAC_SECRET: z.string().min(32),
+    APP_URL:z.string().url(),
+    NODE_ENV: z.enum([ "development", "production", "test" ])
+
+});
+
+export const env = envSchema.parse(process.env);
 ```
 ---
 
