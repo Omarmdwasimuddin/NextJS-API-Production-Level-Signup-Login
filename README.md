@@ -413,6 +413,78 @@ export async function POST(request: NextRequest) {
 ```
 ---
 
+### proxy.ts — access token verify + attach identity
+```bash
+import { NextRequest, NextResponse } from "next/server";
+import { log } from "@/lib/logger";
+import { verifyAccessToken } from "@/lib/auth/tokens";
+
+const PROTECTED_PREFIXES = [
+    "/api/profile",
+    "/api/orders",
+]
+
+export async function proxy(request:NextRequest){
+    const requestId = crypto.randomUUID();
+    
+    const isProtected = PROTECTED_PREFIXES.some((p)=> request.nextUrl.pathname.startsWith(p));
+
+    if (!isProtected) return NextResponse.next();
+
+    const token = request.cookies.get("access_token")?.value;
+
+    if (!token) {
+        log.warn(
+            {
+                requestId,
+                path: request.nextUrl.pathname,
+                method: request.method,
+            },
+            "Authentication required"
+        )
+        return NextResponse.json(
+            {status: "fail", requestId, message: "Authentication required"},
+            {status: 401}
+        )
+    }
+
+    try {
+        
+        const payload = await verifyAccessToken(token);
+        
+        const headers = new Headers(request.headers);
+        headers.set("x-user-id", payload.sub as string);
+        headers.set("x-user-role", payload.role as string);
+
+        return NextResponse.next(
+            { request: { headers } }
+        );
+
+    } catch (error) {
+        log.error(
+            { 
+                requestId,
+                error,
+             },
+            "Access token verification failed"
+        )
+
+        return NextResponse.json(
+            {status: "fail", requestId, message: "Invalid or expired token"},
+            {status: 401}
+        )
+    }
+
+}
+```
+---
+
+###
+```bash
+
+```
+---
+
 ###
 ```bash
 
