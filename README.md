@@ -41,3 +41,47 @@ enum Role {
 }
 ```
 ---
+
+####  lib/validations/user.schema.ts
+```bash
+import { z } from "zod";
+
+
+export const signupSchema = z.object({
+
+    name: z.string().trim().min(2).max(50),
+    email: z.string().trim().toLowerCase().email(),
+
+    password: z
+    .string()
+    .min(8, "Password must be at least 8 characters")
+    .regex(/[A-Z]/, "Must contain an uppercase letter")
+    .regex(/[a-z]/, "Must contain a lowercase letter")
+    .regex(/[0-9]/, "Must contain a number")
+    .regex(/[^A-Za-z0-9]/, "Must contain a special character"),
+
+});
+
+export const loginSchema = z.object({
+
+    email: z.string().trim().toLowerCase().email(),
+    password: z.string().min(1),
+
+})
+
+export type SignupUserInput = z.infer<typeof signupSchema>;
+export type LoginUserInput = z.infer<typeof loginSchema>;
+```
+---
+
+####
+```bash
+
+```
+---
+
+####
+```bash
+
+```
+---
