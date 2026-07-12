@@ -202,15 +202,214 @@ export function hashRefreshToken(raw: string) {
 ```
 ---
 
-###
+### app/api/auth/signup/route.ts
 ```bash
+import { NextRequest, NextResponse } from "next/server";
+import prisma from "@/lib/prisma";
+import { log } from "@/lib/logger"
+import { handlePrismaError } from "@/lib/errors/handlePrismaError";
+import { signupSchema } from "@/lib/validations/user.schema";
+import { hashPassword } from "@/lib/auth/password";
 
+export async function POST(request: NextRequest) {
+    const requestId = crypto.randomUUID();
+    try {
+        log.info(
+            {
+                requestId,
+                path: request.nextUrl.pathname,
+                method: request.method,
+            },
+            "User data received"
+        )
+
+        const jsonBody = await request.json();
+        const validation = signupSchema.safeParse(jsonBody);
+
+        if (!validation.success) {
+            log.warn(
+                {
+                    requestId,
+                    errors: validation.error.flatten().fieldErrors,
+                },
+                "Invalid User Input"
+            )
+
+            return NextResponse.json(
+                {status: "fail", requestId, message: "Invalid user input", errors: validation.error.flatten().fieldErrors},
+                {status: 400}
+            )
+        }
+
+        const {name, email, password} = validation.data;
+        const passwordHash = await hashPassword(password);
+
+        const userSignup = await prisma.user.create({
+            data: { name, email, passwordHash },
+            select: { id: true, name: true, email: true }
+        })
+        
+
+        
+        log.info(
+            {
+                requestId,
+                name: validation.data.name,
+                email: validation.data.email,
+            },
+            "User created successfull!"
+        )
+
+        return NextResponse.json(
+            {status: "success", requestId, message: "User account created successfull!", data: userSignup},
+            {status: 201}
+        )
+    } catch (error) {
+        const { status, message } = handlePrismaError(error);
+        log.error(
+        { 
+            requestId,
+            err: error instanceof Error 
+                ? { message: error.message, stack: error.stack, name: error.name }
+                : String(error),
+        },
+        message
+    )
+    return NextResponse.json(
+        { status: "fail", requestId, message },
+        { status }
+    )
+    }
+}
 ```
 ---
 
-###
+### app/api/auth/login/route.ts
 ```bash
+import { NextRequest, NextResponse } from "next/server";
+import prisma from "@/lib/prisma";
+import { log } from "@/lib/logger"
+import { handlePrismaError } from "@/lib/errors/handlePrismaError";
+import { loginSchema } from "@/lib/validations/user.schema";
+import { verifyPassword } from "@/lib/auth/password";
+import { signAccessToken, generateRefreshToken } from "@/lib/auth/tokens";
 
+export async function POST(request: NextRequest) {
+    const requestId = crypto.randomUUID();
+    try {
+        log.info(
+            {
+                requestId,
+                path: request.nextUrl.pathname,
+                method: request.method,
+            },
+            "Login data received"
+        )
+
+        const jsonBody = await request.json();
+        const validation = loginSchema.safeParse(jsonBody);
+
+        if (!validation.success) {
+            log.warn(
+                {
+                    requestId,
+                    errors: validation.error.flatten().fieldErrors,
+                },
+                "Invalid Input"
+            )
+            return NextResponse.json(
+                {status: "fail", requestId, message: "Invalid Input", errors: validation.error.flatten().fieldErrors},
+                {status: 400}
+            )
+        }
+
+        const { email, password } = validation.data;
+
+        const user = await prisma.user.findUnique({
+            where: { email },
+        });
+
+        if (!user || !(await verifyPassword(user.passwordHash, password))) {
+            log.warn(
+                {
+                    requestId,
+                    email,
+                },
+                "Failed login attempt"
+            )
+
+            return NextResponse.json(
+                {status: "fail", requestId, message: "Invalid email or password"},
+                {status: 401}
+            )
+        }
+
+        const accessToken = await signAccessToken(user.id, user.role);
+        const { raw: refreshRaw, hashed: refreshHashed } = generateRefreshToken();
+
+        await prisma.refreshToken.create({
+            data: {
+                tokenHash: refreshHashed,
+                userId: user.id,
+                expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+            },
+        });
+
+        
+
+        const response = NextResponse.json({
+            status: "success",
+            user: {
+                id: user.id,
+                name: user.name,
+                email: user.email,
+            },
+        });
+
+       response.cookies.set("access_token", accessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        path: "/",
+        maxAge: 60 * 15, // 15min
+       }) 
+
+       response.cookies.set("refresh_token", refreshRaw, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        path: "/api/auth", // শুধু auth route এই accessible
+        maxAge: 60 * 60 * 24 * 7,
+       })
+
+       log.info(
+            {
+                requestId,
+                userId: user.id,
+                email: user.email,
+            },
+            "User logged in"
+        )
+        
+        return response;
+        
+    } catch (error) {
+        const { status, message } = handlePrismaError(error);
+        log.error(
+        { 
+            requestId,
+            err: error instanceof Error 
+                ? { message: error.message, stack: error.stack, name: error.name }
+                : String(error),
+        },
+        message
+    )
+    return NextResponse.json(
+        { status: "fail", requestId, message },
+        { status }
+    )
+    }
+}
 ```
 ---
 
