@@ -1,6 +1,6 @@
 ## Next.js API: Production-Level Signup & Login
 
-#### prisma/schema.prisma
+### prisma/schema.prisma
 ```bash
 generator client {
   provider = "prisma-client-js"
@@ -42,7 +42,7 @@ enum Role {
 ```
 ---
 
-####  lib/validations/user.schema.ts
+###  lib/validations/user.schema.ts
 ```bash
 import { z } from "zod";
 
@@ -74,13 +74,13 @@ export type LoginUserInput = z.infer<typeof loginSchema>;
 ```
 ---
 
-####
+###
 ```bash
 
 ```
 ---
 
-####
+###
 ```bash
 
 ```
