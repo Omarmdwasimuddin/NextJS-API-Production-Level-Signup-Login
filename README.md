@@ -284,6 +284,50 @@ export async function POST(request: NextRequest) {
 ```
 ---
 
+### lib/rate-limit.ts
+```bash
+import { Ratelimit } from "@upstash/ratelimit";
+import { Redis } from "@upstash/redis";
+import { env } from "./validations/env";
+
+
+const redis = new Redis({
+    url: env.UPSTASH_REDIS_REST_URL,
+    token: env.UPSTASH_REDIS_REST_TOKEN,
+});
+
+export const ipRateLimit = new Ratelimit({
+    redis,
+    limiter: Ratelimit.slidingWindow(10, "1 m"),
+    analytics: true,
+    prefix: "ratelimit:login:ip",
+});
+
+export const emailRateLimit = new Ratelimit({
+    redis,
+    limiter: Ratelimit.slidingWindow(5, "1 m"),
+    analytics: true,
+    prefix: "ratelimit:login:email",
+});
+```
+---
+
+### lib/get-client-ip.ts
+```bash
+import { NextRequest } from "next/server";
+
+export function getClientIp(request: NextRequest): string {
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  if (forwardedFor) {
+    return forwardedFor.split(",")[0].trim();
+  }
+  const realIp = request.headers.get("x-real-ip");
+  if (realIp) return realIp;
+  return "unknown";
+}
+```
+---
+
 ### app/api/auth/login/route.ts
 ```bash
 import { NextRequest, NextResponse } from "next/server";
@@ -293,6 +337,8 @@ import { handlePrismaError } from "@/lib/errors/handlePrismaError";
 import { loginSchema } from "@/lib/validations/user.schema";
 import { verifyPassword } from "@/lib/auth/password";
 import { signAccessToken, generateRefreshToken } from "@/lib/auth/tokens";
+import { ipRateLimit, emailRateLimit } from "@/lib/rate-limit";
+import { getClientIp } from "@/lib/get-client-ip";
 
 export async function POST(request: NextRequest) {
     const requestId = crypto.randomUUID();
@@ -305,6 +351,34 @@ export async function POST(request: NextRequest) {
             },
             "Login data received"
         )
+
+        const clientIp = getClientIp(request);
+        const ipResult = await ipRateLimit.limit(clientIp);
+
+        if (!ipResult.success) {
+            log.warn(
+                {
+                    requestId,
+                    ip: clientIp,
+                    remaining: ipResult.remaining,
+                    reset: ipResult.reset,
+                },
+                "IP rate limit exceeded on login"
+            )
+            return NextResponse.json(
+                {
+                    status: "fail",
+                    requestId,
+                    message: "Too many login attempts. Please try again later.",
+                },
+                {
+                    status: 429,
+                    headers: {
+                        "Retry-After": Math.ceil((ipResult.reset - Date.now()) / 1000).toString(),
+                    },
+                }
+            )
+        }
 
         const jsonBody = await request.json();
         const validation = loginSchema.safeParse(jsonBody);
@@ -325,6 +399,33 @@ export async function POST(request: NextRequest) {
 
         const { email, password } = validation.data;
 
+        const emailResult = await emailRateLimit.limit(email);
+
+        if (!emailResult.success) {
+            log.warn(
+                {
+                    requestId,
+                    email,
+                    ip: clientIp,
+                    reset: emailResult.reset,
+                },
+                "Email rate limit exceeded on login"
+            )
+            return NextResponse.json(
+                {
+                    status: "fail",
+                    requestId,
+                    message: "Too many attempts for this account. Please try again later.",
+                },
+                {
+                    status: 429,
+                    headers: {
+                        "Retry-After": Math.ceil((emailResult.reset - Date.now()) / 1000).toString(),
+                    },
+                }
+            )
+        }
+
         const user = await prisma.user.findUnique({
             where: { email },
         });
@@ -337,7 +438,6 @@ export async function POST(request: NextRequest) {
                 },
                 "Failed login attempt"
             )
-
             return NextResponse.json(
                 {status: "fail", requestId, message: "Invalid email or password"},
                 {status: 401}
@@ -355,8 +455,6 @@ export async function POST(request: NextRequest) {
             },
         });
 
-        
-
         const response = NextResponse.json({
             status: "success",
             user: {
@@ -371,14 +469,14 @@ export async function POST(request: NextRequest) {
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
         path: "/",
-        maxAge: 60 * 15, // 15min
+        maxAge: 60 * 15,
        }) 
 
        response.cookies.set("refresh_token", refreshRaw, {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
-        path: "/api/auth", // শুধু auth route এই accessible
+        path: "/api/auth",
         maxAge: 60 * 60 * 24 * 7,
        })
 
