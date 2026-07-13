@@ -17,15 +17,38 @@ model User {
   email         String   @unique
   passwordHash  String
   role          Role     @default(USER)
+  isVerified    Boolean  @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   refreshTokens RefreshToken[]
+  emailOtps     EmailOtp[]
+}
+
+model EmailOtp {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  otpHash     String   // HMAC hashed, raw kokhono store hoy na
+  purpose     OtpPurpose @default(SIGNUP_VERIFY)
+  attempts    Int      @default(0)   // koto bar wrong try hoyeche
+  maxAttempts Int      @default(5)
+  expiresAt   DateTime
+  consumedAt  DateTime?              // successfully verify hole set hobe
+  createdAt   DateTime @default(now())
+
+  @@index([userId, purpose])
+}
+
+enum OtpPurpose {
+  SIGNUP_VERIFY
+  LOGIN_2FA
+  PASSWORD_RESET
 }
 
 model RefreshToken {
   id         String   @id @default(cuid())
-  tokenHash  String   @unique   // HMAC hashed, never store raw
+  tokenHash  String   @unique
   userId     String
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   expiresAt  DateTime
