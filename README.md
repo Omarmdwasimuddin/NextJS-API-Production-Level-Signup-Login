@@ -160,7 +160,7 @@ export async function verifyPassword(
 ```
 ---
 
-### lib/auth/tokens.ts
+### lib/auth/tokens.ts (Cookie-based JWT authentication)
 ```bash
 import { SignJWT, jwtVerify } from "jose";
 import { createHmac, randomBytes, randomUUID } from "crypto";
