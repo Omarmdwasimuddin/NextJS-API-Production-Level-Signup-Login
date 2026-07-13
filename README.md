@@ -496,10 +496,10 @@ export async function POST(request: NextRequest) {
         {
             requestId,
         },
-        ""
+        "Refresh token cookie is missing"
     )
     return NextResponse.json(
-        { status: "fail", requestId, message: "" }, 
+        { status: "fail", requestId, message: "Refresh token is required" }, 
         { status: 401 }
     );
   }
@@ -515,8 +515,9 @@ export async function POST(request: NextRequest) {
     log.warn(
         {
             requestId,
+            userID: stored?.userId,
         },
-        "Session expired"
+        "Invalid, revoked, or expired refresh token"
     )
     return NextResponse.json(
         { status: "fail", message: "Session expired" }, 
@@ -547,11 +548,12 @@ export async function POST(request: NextRequest) {
   log.info(
     {
         requestId,
+        userID: stored.userId,
     },
-    "success"
+    "Refresh token rotated successfully"
   )
 
-  const response = NextResponse.json({ status: "success" });
+  const response = NextResponse.json({ status: "success", requestId, message: "Session refreshed successfully" });
 
   response.cookies.set("access_token", newAccess, {
     httpOnly: true, 
