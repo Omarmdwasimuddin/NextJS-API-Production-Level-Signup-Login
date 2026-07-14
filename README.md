@@ -292,6 +292,7 @@ export async function sendOtpEmail(to: string, otp: string, name: string) {
     throw error;
   }
 }
+```
 ---
 
 ### app/api/auth/signup/route.ts
