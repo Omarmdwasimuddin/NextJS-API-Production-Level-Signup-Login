@@ -299,20 +299,18 @@ export async function sendOtpEmail(to: string, otp: string, name: string) {
 ```bash
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { log } from "@/lib/logger"
+import { log } from "@/lib/logger";
 import { handlePrismaError } from "@/lib/errors/handlePrismaError";
 import { signupSchema } from "@/lib/validations/user.schema";
 import { hashPassword } from "@/lib/auth/password";
+import { generateOtp, hashOtp, getOtpExpiry } from "@/lib/auth/otp";
+import { sendOtpEmail } from "@/lib/email/sendEmail";
 
 export async function POST(request: NextRequest) {
     const requestId = crypto.randomUUID();
     try {
         log.info(
-            {
-                requestId,
-                path: request.nextUrl.pathname,
-                method: request.method,
-            },
+            { requestId, path: request.nextUrl.pathname, method: request.method },
             "User data received"
         )
 
@@ -321,57 +319,79 @@ export async function POST(request: NextRequest) {
 
         if (!validation.success) {
             log.warn(
-                {
-                    requestId,
-                    errors: validation.error.flatten().fieldErrors,
-                },
+                { requestId, errors: validation.error.flatten().fieldErrors },
                 "Invalid User Input"
             )
-
             return NextResponse.json(
-                {status: "fail", requestId, message: "Invalid user input", errors: validation.error.flatten().fieldErrors},
-                {status: 400}
+                { status: "fail", requestId, message: "Invalid user input", errors: validation.error.flatten().fieldErrors },
+                { status: 400 }
             )
         }
 
-        const {name, email, password} = validation.data;
+        const { name, email, password } = validation.data;
         const passwordHash = await hashPassword(password);
 
-        const userSignup = await prisma.user.create({
-            data: { name, email, passwordHash },
-            select: { id: true, name: true, email: true }
-        })
-        
+        const otp = generateOtp();
+        const otpHash = hashOtp(otp, email);
 
-        
+        const result = await prisma.$transaction(async (tx) => {
+            const user = await tx.user.create({
+                data: { name, email, passwordHash, isVerified: false },
+                select: { id: true, name: true, email: true },
+            });
+
+            await tx.emailOtp.create({
+                data: {
+                    userId: user.id,
+                    otpHash,
+                    purpose: "SIGNUP_VERIFY",
+                    expiresAt: getOtpExpiry(),
+                },
+            });
+
+            return user;
+        });
+
+        try {
+            await sendOtpEmail(result.email, otp, result.name);
+        } catch (emailError) {
+            // Email fail হলেও user creation rollback করবো না —
+            // user resend-otp দিয়ে আবার try করতে পারবে
+            log.error(
+                { requestId, userId: result.id, error: emailError },
+                "OTP email failed to send after signup"
+            )
+        }
+
         log.info(
-            {
-                requestId,
-                name: validation.data.name,
-                email: validation.data.email,
-            },
-            "User created successfull!"
+            { requestId, name: result.name, email: result.email },
+            "User created, OTP sent for verification"
         )
 
         return NextResponse.json(
-            {status: "success", requestId, message: "User account created successfull!", data: userSignup},
-            {status: 201}
+            {
+                status: "success",
+                requestId,
+                message: "Account created. Check your email for the verification code.",
+                data: { id: result.id, name: result.name, email: result.email },
+            },
+            { status: 201 }
         )
     } catch (error) {
         const { status, message } = handlePrismaError(error);
         log.error(
-        { 
-            requestId,
-            err: error instanceof Error 
-                ? { message: error.message, stack: error.stack, name: error.name }
-                : String(error),
-        },
-        message
-    )
-    return NextResponse.json(
-        { status: "fail", requestId, message },
-        { status }
-    )
+            {
+                requestId,
+                err: error instanceof Error
+                    ? { message: error.message, stack: error.stack, name: error.name }
+                    : String(error),
+            },
+            message
+        )
+        return NextResponse.json(
+            { status: "fail", requestId, message },
+            { status }
+        )
     }
 }
 ```
