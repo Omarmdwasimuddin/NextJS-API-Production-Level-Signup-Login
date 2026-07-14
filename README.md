@@ -355,8 +355,6 @@ export async function POST(request: NextRequest) {
         try {
             await sendOtpEmail(result.email, otp, result.name);
         } catch (emailError) {
-            // Email fail হলেও user creation rollback করবো না —
-            // user resend-otp দিয়ে আবার try করতে পারবে
             log.error(
                 { requestId, userId: result.id, error: emailError },
                 "OTP email failed to send after signup"
