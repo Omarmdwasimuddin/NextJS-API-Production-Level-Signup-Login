@@ -138,6 +138,24 @@ export type LoginUserInput = z.infer<typeof loginSchema>;
 ```
 ---
 
+### lib/validations/otp.schema.ts
+```bash
+import { z } from "zod";
+
+export const verifyOtpSchema = z.object({
+  email: z.string().trim().toLowerCase().email(),
+  otp: z.string().length(6, "OTP must be 6 digits").regex(/^\d+$/, "OTP must contain only digits"),
+});
+
+export const resendOtpSchema = z.object({
+  email: z.string().trim().toLowerCase().email(),
+});
+
+export type VerifyOtpInput = z.infer<typeof verifyOtpSchema>;
+export type ResendOtpInput = z.infer<typeof resendOtpSchema>;
+```
+---
+
 ### lib/validations/env.ts
 ```bash
 import { z } from "zod";
@@ -149,7 +167,12 @@ export const envSchema = z.object({
     DIRECT_URL: z.string().url(),
     JWT_ACCESS_SECRET: z.string().min(32),
     REFRESH_HMAC_SECRET: z.string().min(32),
-    APP_URL:z.string().url(),
+    APP_URL: z.string().url(),
+    UPSTASH_REDIS_REST_URL: z.string().url(),
+    UPSTASH_REDIS_REST_TOKEN: z.string().min(1),
+    OTP_HMAC_SECRET: z.string().min(32),
+    RESEND_API_KEY: z.string().startsWith("re_", "Invalid Resend API key"),
+    EMAIL_FROM: z.string().trim().email(),
     NODE_ENV: z.enum([ "development", "production", "test" ])
 
 });
