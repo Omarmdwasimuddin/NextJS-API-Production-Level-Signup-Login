@@ -254,6 +254,46 @@ export { OTP_LENGTH, OTP_EXPIRY_MINUTES, OTP_MAX_ATTEMPTS, OTP_RESEND_COOLDOWN_S
 ```
 ---
 
+### lib/email/sendEmail.ts
+```bash
+import { Resend } from "resend";
+import { env } from "@/lib/validations/env";
+import { log } from "@/lib/logger";
+
+const resend = new Resend(env.RESEND_API_KEY);
+
+export async function sendOtpEmail(to: string, otp: string, name: string) {
+  try {
+    const { data, error } = await resend.emails.send({
+      from: env.EMAIL_FROM,
+      to,
+      subject: "তোমার Verification Code",
+      html: `
+        <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
+          <h2>Email Verify করো</h2>
+          <p>হ্যালো ${name},</p>
+          <p>তোমার account verify করার জন্য এই কোডটা ব্যবহার করো:</p>
+          <div style="font-size: 32px; font-weight: bold; letter-spacing: 8px; padding: 16px; background: #f4f4f4; text-align: center; border-radius: 8px;">
+            ${otp}
+          </div>
+          <p style="color: #666; font-size: 14px;">এই কোডটা ১০ মিনিটের মধ্যে expire হয়ে যাবে। যদি তুমি এই request না করে থাকো, এই email ignore করো।</p>
+        </div>
+      `,
+    });
+
+    if (error) {
+      log.error({ error, to }, "Failed to send OTP email");
+      throw new Error("Email send failed");
+    }
+
+    return data;
+  } catch (error) {
+    log.error({ error, to }, "Email service error");
+    throw error;
+  }
+}
+---
+
 ### app/api/auth/signup/route.ts
 ```bash
 import { NextRequest, NextResponse } from "next/server";
