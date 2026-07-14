@@ -418,6 +418,149 @@ export async function POST(request: NextRequest) {
 ```
 ---
 
+### app/api/auth/verify-otp/route.ts
+```bash
+import { NextRequest, NextResponse } from "next/server";
+import prisma from "@/lib/prisma";
+import { log } from "@/lib/logger";
+import { handlePrismaError } from "@/lib/errors/handlePrismaError";
+import { verifyOtpSchema } from "@/lib/validations/otp.schema";
+import { hashOtp, OTP_MAX_ATTEMPTS } from "@/lib/auth/otp";
+import { ipRateLimit } from "@/lib/rate-limit";
+import { getClientIp } from "@/lib/get-client-ip";
+
+export async function POST(request: NextRequest) {
+    const requestId = crypto.randomUUID();
+    try {
+        // ---- IP rate limit: OTP brute-force ঠেকানোর প্রথম layer ----
+        const clientIp = getClientIp(request);
+        const ipResult = await ipRateLimit.limit(`otp-verify:${clientIp}`);
+
+        if (!ipResult.success) {
+            log.warn({ requestId, ip: clientIp }, "IP rate limit exceeded on OTP verify");
+            return NextResponse.json(
+                { status: "fail", requestId, message: "Too many attempts. Please try again later." },
+                { status: 429 }
+            )
+        }
+
+        const jsonBody = await request.json();
+        const validation = verifyOtpSchema.safeParse(jsonBody);
+
+        if (!validation.success) {
+            return NextResponse.json(
+                { status: "fail", requestId, message: "Invalid input", errors: validation.error.flatten().fieldErrors },
+                { status: 400 }
+            )
+        }
+
+        const { email, otp } = validation.data;
+
+        const user = await prisma.user.findUnique({
+            where: { email },
+            select: { id: true, isVerified: true },
+        });
+
+        // ---- User না পাওয়া গেলেও generic message দেবো, email enumeration ঠেকাতে ----
+        if (!user) {
+            log.warn({ requestId, email }, "OTP verify attempted for non-existent user");
+            return NextResponse.json(
+                { status: "fail", requestId, message: "Invalid or expired code" },
+                { status: 400 }
+            )
+        }
+
+        if (user.isVerified) {
+            return NextResponse.json(
+                { status: "success", requestId, message: "Account already verified" },
+                { status: 200 }
+            )
+        }
+
+        // ---- সবচেয়ে latest, unconsumed, non-expired OTP খুঁজবো ----
+        const latestOtp = await prisma.emailOtp.findFirst({
+            where: {
+                userId: user.id,
+                purpose: "SIGNUP_VERIFY",
+                consumedAt: null,
+            },
+            orderBy: { createdAt: "desc" },
+        });
+
+        if (!latestOtp || latestOtp.expiresAt < new Date()) {
+            log.warn({ requestId, userId: user.id }, "OTP expired or not found");
+            return NextResponse.json(
+                { status: "fail", requestId, message: "Invalid or expired code" },
+                { status: 400 }
+            )
+        }
+
+        if (latestOtp.attempts >= OTP_MAX_ATTEMPTS) {
+            log.warn({ requestId, userId: user.id }, "OTP max attempts exceeded");
+            return NextResponse.json(
+                { status: "fail", requestId, message: "Too many failed attempts. Please request a new code." },
+                { status: 429 }
+            )
+        }
+
+        const submittedHash = hashOtp(otp, email);
+
+        if (submittedHash !== latestOtp.otpHash) {
+            // ---- attempt count বাড়াবো, brute-force track করার জন্য ----
+            await prisma.emailOtp.update({
+                where: { id: latestOtp.id },
+                data: { attempts: { increment: 1 } },
+            });
+
+            log.warn(
+                { requestId, userId: user.id, attempts: latestOtp.attempts + 1 },
+                "Wrong OTP submitted"
+            )
+
+            return NextResponse.json(
+                { status: "fail", requestId, message: "Invalid or expired code" },
+                { status: 400 }
+            )
+        }
+
+        // ---- Match হলে: user verify + OTP consume, atomic transaction এ ----
+        await prisma.$transaction([
+            prisma.user.update({
+                where: { id: user.id },
+                data: { isVerified: true },
+            }),
+            prisma.emailOtp.update({
+                where: { id: latestOtp.id },
+                data: { consumedAt: new Date() },
+            }),
+        ]);
+
+        log.info({ requestId, userId: user.id }, "Email verified successfully");
+
+        return NextResponse.json(
+            { status: "success", requestId, message: "Email verified successfully" },
+            { status: 200 }
+        )
+    } catch (error) {
+        const { status, message } = handlePrismaError(error);
+        log.error(
+            {
+                requestId,
+                err: error instanceof Error
+                    ? { message: error.message, stack: error.stack, name: error.name }
+                    : String(error),
+            },
+            message
+        )
+        return NextResponse.json(
+            { status: "fail", requestId, message },
+            { status }
+        )
+    }
+}
+```
+---
+
 ### lib/rate-limit.ts
 ```bash
 import { Ratelimit } from "@upstash/ratelimit";
