@@ -225,6 +225,35 @@ export function hashRefreshToken(raw: string) {
 ```
 ---
 
+### lib/auth/otp.ts
+```bash
+import { createHmac, randomInt } from "crypto";
+import { env } from "@/lib/validations/env";
+
+const OTP_HMAC_KEY = env.OTP_HMAC_SECRET;
+const OTP_LENGTH = 6;
+const OTP_EXPIRY_MINUTES = 10;
+const OTP_MAX_ATTEMPTS = 5;
+const OTP_RESEND_COOLDOWN_SECONDS = 60;
+
+export function generateOtp(): string {
+  return randomInt(100000, 1000000).toString();
+}
+
+export function hashOtp(otp: string, email: string): string {
+  return createHmac("sha256", OTP_HMAC_KEY)
+    .update(`${email.toLowerCase()}:${otp}`)
+    .digest("hex");
+}
+
+export function getOtpExpiry(): Date {
+  return new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
+}
+
+export { OTP_LENGTH, OTP_EXPIRY_MINUTES, OTP_MAX_ATTEMPTS, OTP_RESEND_COOLDOWN_SECONDS };
+```
+---
+
 ### app/api/auth/signup/route.ts
 ```bash
 import { NextRequest, NextResponse } from "next/server";
