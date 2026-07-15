@@ -748,6 +748,7 @@ export async function POST(request: NextRequest) {
             "Login data received"
         )
 
+        // ---- Step 1: IP rate limit check (body parse করার আগেই, কারণ এটা cheapest check) ----
         const clientIp = getClientIp(request);
         const ipResult = await ipRateLimit.limit(clientIp);
 
@@ -795,6 +796,7 @@ export async function POST(request: NextRequest) {
 
         const { email, password } = validation.data;
 
+        // ---- Step 2: Email rate limit check (body validate হওয়ার পর, কারণ email লাগবে) ----
         const emailResult = await emailRateLimit.limit(email);
 
         if (!emailResult.success) {
@@ -837,6 +839,22 @@ export async function POST(request: NextRequest) {
             return NextResponse.json(
                 {status: "fail", requestId, message: "Invalid email or password"},
                 {status: 401}
+            )
+        }
+
+        if (!user.isVerified) {
+            log.warn(
+                {
+                    requestId,
+                    userId: user.id,
+                    email,
+                },
+                "Login attempt with unverified email"
+            )
+
+            return NextResponse.json(
+                {status: "fail", requestId, message: "Please verify your email before logging in", code: "EMAIL_NOT_VERIFIED"},
+                {status: 403}
             )
         }
 
