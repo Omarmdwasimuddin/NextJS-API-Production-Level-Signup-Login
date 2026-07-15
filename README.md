@@ -561,6 +561,125 @@ export async function POST(request: NextRequest) {
 ```
 ---
 
+### app/api/auth/resend-otp/route.ts
+```bash
+import { NextRequest, NextResponse } from "next/server";
+import { Ratelimit } from "@upstash/ratelimit";
+import { Redis } from "@upstash/redis";
+import prisma from "@/lib/prisma";
+import { log } from "@/lib/logger";
+import { handlePrismaError } from "@/lib/errors/handlePrismaError";
+import { resendOtpSchema } from "@/lib/validations/otp.schema";
+import { generateOtp, hashOtp, getOtpExpiry } from "@/lib/auth/otp";
+import { sendOtpEmail } from "@/lib/email/sendEmail";
+import { env } from "@/lib/validations/env";
+
+const redis = new Redis({
+    url: env.UPSTASH_REDIS_REST_URL,
+    token: env.UPSTASH_REDIS_REST_TOKEN,
+});
+
+
+const resendOtpLimit = new Ratelimit({
+    redis,
+    limiter: Ratelimit.slidingWindow(1, "60 s"),
+    analytics: true,
+    prefix: "ratelimit:otp:resend",
+});
+
+export async function POST(request: NextRequest) {
+    const requestId = crypto.randomUUID();
+    try {
+        const jsonBody = await request.json();
+        const validation = resendOtpSchema.safeParse(jsonBody);
+
+        if (!validation.success) {
+            return NextResponse.json(
+                { status: "fail", requestId, message: "Invalid input", errors: validation.error.flatten().fieldErrors },
+                { status: 400 }
+            )
+        }
+
+        const { email } = validation.data;
+
+        const cooldownResult = await resendOtpLimit.limit(email);
+
+        if (!cooldownResult.success) {
+            log.warn({ requestId, email }, "OTP resend cooldown active");
+            return NextResponse.json(
+                {
+                    status: "fail",
+                    requestId,
+                    message: "Please wait before requesting another code.",
+                },
+                {
+                    status: 429,
+                    headers: {
+                        "Retry-After": Math.ceil((cooldownResult.reset - Date.now()) / 1000).toString(),
+                    },
+                }
+            )
+        }
+
+        const user = await prisma.user.findUnique({
+            where: { email },
+            select: { id: true, name: true, email: true, isVerified: true },
+        });
+
+        if (!user || user.isVerified) {
+            log.warn({ requestId, email }, "Resend OTP requested for invalid/verified user");
+            return NextResponse.json(
+                { status: "success", requestId, message: "If an account exists, a new code has been sent." },
+                { status: 200 }
+            )
+        }
+
+        const otp = generateOtp();
+        const otpHash = hashOtp(otp, email);
+
+        await prisma.$transaction([
+            prisma.emailOtp.updateMany({
+                where: { userId: user.id, purpose: "SIGNUP_VERIFY", consumedAt: null },
+                data: { consumedAt: new Date() }, 
+            }),
+            prisma.emailOtp.create({
+                data: {
+                    userId: user.id,
+                    otpHash,
+                    purpose: "SIGNUP_VERIFY",
+                    expiresAt: getOtpExpiry(),
+                },
+            }),
+        ]);
+
+        await sendOtpEmail(user.email, otp, user.name);
+
+        log.info({ requestId, userId: user.id }, "OTP resent successfully");
+
+        return NextResponse.json(
+            { status: "success", requestId, message: "If an account exists, a new code has been sent." },
+            { status: 200 }
+        )
+    } catch (error) {
+        const { status, message } = handlePrismaError(error);
+        log.error(
+            {
+                requestId,
+                err: error instanceof Error
+                    ? { message: error.message, stack: error.stack, name: error.name }
+                    : String(error),
+            },
+            message
+        )
+        return NextResponse.json(
+            { status: "fail", requestId, message },
+            { status }
+        )
+    }
+}
+```
+---
+
 ### lib/rate-limit.ts
 ```bash
 import { Ratelimit } from "@upstash/ratelimit";
