@@ -1130,9 +1130,13 @@ import { NextRequest, NextResponse } from "next/server";
 import  prisma  from "@/lib/prisma";
 import { signAccessToken, generateRefreshToken, hashRefreshToken } from "@/lib/auth/tokens";
 import { log } from "@/lib/logger";
+import { checkCsrf } from "@/lib/auth/csrf-guard";
 
 export async function POST(request: NextRequest) {
     const requestId = crypto.randomUUID();
+
+  const csrfError = checkCsrf(request, requestId);
+  if(csrfError) return csrfError;
 
   const rawRefresh = request.cookies.get("refresh_token")?.value;
 
