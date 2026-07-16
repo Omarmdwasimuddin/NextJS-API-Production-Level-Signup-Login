@@ -171,6 +171,7 @@ export const envSchema = z.object({
     UPSTASH_REDIS_REST_URL: z.string().url(),
     UPSTASH_REDIS_REST_TOKEN: z.string().min(1),
     OTP_HMAC_SECRET: z.string().min(32),
+    CSRF_SECRET: z.string().min(32),
     RESEND_API_KEY: z.string().startsWith("re_", "Invalid Resend API key"),
     EMAIL_FROM: z.string().trim().email(),
     NODE_ENV: z.enum([ "development", "production", "test" ])
