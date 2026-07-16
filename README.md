@@ -278,6 +278,105 @@ export { OTP_LENGTH, OTP_EXPIRY_MINUTES, OTP_MAX_ATTEMPTS, OTP_RESEND_COOLDOWN_S
 ```
 ---
 
+### lib/auth/csrf.ts
+```bash
+import { createHmac, randomBytes, timingSafeEqual } from "crypto";
+import { env } from "@/lib/validations/env";
+
+const CSRF_KEY = env.CSRF_SECRET;
+const CSRF_COOKIE_NAME = "csrf_token";
+const CSRF_HEADER_NAME = "x-csrf-token";
+const CSRF_TOKEN_MAX_AGE = 60 * 60 * 24; // 1 din, cookie er sathe match
+
+// ---- Token structure: "randomPart.signature" ----
+// randomPart client visible, signature দিয়ে prove করে এটা আমাদের server-ই বানিয়েছে
+// (attacker subdomain থেকে random string বসিয়ে দিলেও signature match করবে না)
+function signToken(randomPart: string): string {
+  return createHmac("sha256", CSRF_KEY).update(randomPart).digest("hex");
+}
+
+export function generateCsrfToken(): string {
+  const randomPart = randomBytes(32).toString("hex");
+  const signature = signToken(randomPart);
+  return `${randomPart}.${signature}`;
+}
+
+function isValidTokenFormat(token: string): { randomPart: string; signature: string } | null {
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+  const [randomPart, signature] = parts;
+  if (!randomPart || !signature) return null;
+  return { randomPart, signature };
+}
+
+// ---- Signature valid কিনা check করে — token টা আসলেই আমাদের server generate করেছে কিনা ----
+export function verifyTokenSignature(token: string): boolean {
+  const parsed = isValidTokenFormat(token);
+  if (!parsed) return false;
+
+  const expectedSignature = signToken(parsed.randomPart);
+
+  const expected = Buffer.from(expectedSignature);
+  const actual = Buffer.from(parsed.signature);
+
+  // ---- timing-safe compare — length আলাদা হলে সরাসরি false, mismatch হলে
+  // constant-time compare যাতে timing attack দিয়ে signature বের করা না যায় ----
+  if (expected.length !== actual.length) return false;
+  return timingSafeEqual(expected, actual);
+}
+
+// ---- Cookie value আর header value দুইটাই match করছে কিনা এবং signature valid কিনা ----
+export function verifyCsrfRequest(cookieToken: string | undefined, headerToken: string | undefined): boolean {
+  if (!cookieToken || !headerToken) return false;
+
+  // ---- প্রথমে signature verify করবো (নাহলে invalid token দিয়েও pass হয়ে যাবে
+  // যদি কেউ cookie আর header এ same garbage value বসায়) ----
+  if (!verifyTokenSignature(cookieToken)) return false;
+
+  const cookieBuf = Buffer.from(cookieToken);
+  const headerBuf = Buffer.from(headerToken);
+
+  if (cookieBuf.length !== headerBuf.length) return false;
+  return timingSafeEqual(cookieBuf, headerBuf);
+}
+
+export { CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CSRF_TOKEN_MAX_AGE };
+```
+---
+
+### lib/auth/csrf-guard.ts
+```bash
+import { NextRequest, NextResponse } from "next/server";
+import { verifyCsrfRequest, CSRF_COOKIE_NAME, CSRF_HEADER_NAME } from "@/lib/auth/csrf";
+import { log } from "@/lib/logger";
+
+const SAFE_METHODS = ["GET", "HEAD", "OPTIONS"];
+
+// ---- Route handler এর ভিতরে প্রথমে call করবে; fail হলে NextResponse রিটার্ন করবে,
+// pass হলে null রিটার্ন করবে ----
+export function checkCsrf(request: NextRequest, requestId: string): NextResponse | null {
+  // ---- GET/HEAD/OPTIONS state change করে না, তাই CSRF check স্কিপ ----
+  if (SAFE_METHODS.includes(request.method)) return null;
+
+  const cookieToken = request.cookies.get(CSRF_COOKIE_NAME)?.value;
+  const headerToken = request.headers.get(CSRF_HEADER_NAME) ?? undefined;
+
+  if (!verifyCsrfRequest(cookieToken, headerToken)) {
+    log.warn(
+      { requestId, path: request.nextUrl.pathname, method: request.method },
+      "CSRF token verification failed"
+    );
+    return NextResponse.json(
+      { status: "fail", requestId, message: "Invalid or missing CSRF token" },
+      { status: 403 }
+    );
+  }
+
+  return null;
+}
+```
+---
+
 ### lib/email/sendEmail.ts
 ```bash
 import { Resend } from "resend";
@@ -677,6 +776,34 @@ export async function POST(request: NextRequest) {
             { status }
         )
     }
+}
+```
+---
+
+### app/api/auth/csrf-token/route.ts
+```bash
+import { NextRequest, NextResponse } from "next/server";
+import { generateCsrfToken, CSRF_COOKIE_NAME, CSRF_TOKEN_MAX_AGE } from "@/lib/auth/csrf";
+
+// ---- GET route: frontend app load হওয়ার সময় এইটা call করবে,
+// token cookie তে বসবে + response body তেও পাঠাবো (client এর state এ রাখার জন্য) ----
+export async function GET(request: NextRequest) {
+  const token = generateCsrfToken();
+
+  const response = NextResponse.json({
+    status: "success",
+    csrfToken: token,
+  });
+
+  response.cookies.set(CSRF_COOKIE_NAME, token, {
+    httpOnly: false, // ---- JS দিয়ে পড়তে হবে, তাই false ----
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: CSRF_TOKEN_MAX_AGE,
+  });
+
+  return response;
 }
 ```
 ---
