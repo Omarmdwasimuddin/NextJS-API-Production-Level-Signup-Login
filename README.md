@@ -12,14 +12,16 @@ datasource db {
 }
 
 model User {
-  id            String   @id @default(cuid())
-  name          String
-  email         String   @unique
-  passwordHash  String
-  role          Role     @default(USER)
-  isVerified    Boolean  @default(false)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id                    String   @id @default(cuid())
+  name                  String
+  email                 String   @unique
+  passwordHash          String
+  role                  Role     @default(USER)
+  isVerified            Boolean  @default(false)
+  failedLoginAttempts   Int      @default(0)
+  lockedUntil           DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
   refreshTokens RefreshToken[]
   emailOtps     EmailOtp[]
