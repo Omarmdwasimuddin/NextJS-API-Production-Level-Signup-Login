@@ -1058,6 +1058,7 @@ export async function POST(request: NextRequest) {
 import { NextRequest, NextResponse } from "next/server";
 import { log } from "@/lib/logger";
 import { verifyAccessToken } from "@/lib/auth/tokens";
+import { checkCsrf } from "@/lib/auth/csrf-guard";
 
 const PROTECTED_PREFIXES = [
     "/api/profile",
@@ -1070,6 +1071,10 @@ export async function proxy(request:NextRequest){
     const isProtected = PROTECTED_PREFIXES.some((p)=> request.nextUrl.pathname.startsWith(p));
 
     if (!isProtected) return NextResponse.next();
+
+    // ---- প্রথমে CSRF check — token verify হওয়ার আগেই cheap check ----
+    const csrfError = checkCsrf(request, requestId);
+    if(csrfError) return csrfError;
 
     const token = request.cookies.get("access_token")?.value;
 
