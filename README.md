@@ -912,6 +912,7 @@ import { verifyPassword } from "@/lib/auth/password";
 import { signAccessToken, generateRefreshToken } from "@/lib/auth/tokens";
 import { ipRateLimit, emailRateLimit } from "@/lib/rate-limit";
 import { getClientIp } from "@/lib/get-client-ip";
+import { isAccountLocked, recordFailedAttempt, resetFailedAttempts } from "@/lib/auth/lockout";
 
 export async function POST(request: NextRequest) {
     const requestId = crypto.randomUUID();
@@ -1005,18 +1006,52 @@ export async function POST(request: NextRequest) {
             where: { email },
         });
 
-        if (!user || !(await verifyPassword(user.passwordHash, password))) {
-            log.warn(
-                {
-                    requestId,
-                    email,
-                },
-                "Failed login attempt"
-            )
+        if (!user) {
+            log.warn({ requestId, email }, "Failed login attempt - user not found");
             return NextResponse.json(
                 {status: "fail", requestId, message: "Invalid email or password"},
                 {status: 401}
             )
+        }
+
+        // ---- Account lock check — password verify korar age ----
+        if (isAccountLocked(user.lockedUntil)) {
+            const retryAfterSeconds = Math.ceil((user.lockedUntil!.getTime() - Date.now()) / 1000);
+
+            log.warn(
+                { requestId, userId: user.id, email, lockedUntil: user.lockedUntil },
+                "Login attempt on locked account"
+            )
+
+            return NextResponse.json(
+                {
+                    status: "fail",
+                    requestId,
+                    message: "Account temporarily locked due to too many failed attempts. Please try again later.",
+                    code: "ACCOUNT_LOCKED",
+                },
+                { status: 423, headers: { "Retry-After": retryAfterSeconds.toString() } }
+            )
+        }
+
+        const passwordValid = await verifyPassword(user.passwordHash, password);
+
+        if (!passwordValid) {
+            const { newAttempts, locked } = await recordFailedAttempt(user.id, user.failedLoginAttempts);
+
+            log.warn(
+                { requestId, userId: user.id, email, attempts: newAttempts, locked },
+                locked ? "Account locked after max failed attempts" : "Failed login attempt"
+            )
+
+            return NextResponse.json(
+                {status: "fail", requestId, message: "Invalid email or password"},
+                {status: 401}
+            )
+        }
+
+        if (user.failedLoginAttempts > 0) {
+            await resetFailedAttempts(user.id);
         }
 
         if (!user.isVerified) {
