@@ -1307,8 +1307,95 @@ export async function POST(request: NextRequest) {
 ```
 ---
 
-###
+### app/api/auth/logout/route.ts
 ```bash
+import { NextRequest, NextResponse } from "next/server";
+import prisma from "@/lib/prisma";
+import { log } from "@/lib/logger";
+import { handlePrismaError } from "@/lib/errors/handlePrismaError";
+import { hashRefreshToken } from "@/lib/auth/tokens";
+import { checkCsrf } from "@/lib/auth/csrf-guard";
 
+export async function POST(request: NextRequest) {
+    const requestId = crypto.randomUUID();
+    try {
+        // ---- CSRF check — logout o state-changing (DB row revoke করে), তাই lagbe ----
+        const csrfError = checkCsrf(request, requestId);
+        if (csrfError) return csrfError;
+
+        const rawRefresh = request.cookies.get("refresh_token")?.value;
+
+        // ---- refresh_token na thakleo error dibo na — user hoyto already
+        // logged out (cookie expire hoyeche, ba double-click e logout call hoyeche).
+        // Idempotent behavior রাখা ভালো, client e confusing error dekhabo na ----
+        if (rawRefresh) {
+            const tokenHash = hashRefreshToken(rawRefresh);
+
+            // ---- updateMany use korlam, karon token na thakleo (already revoked/
+            // deleted) crash hobe na — findUnique + update korle "not found" e
+            // Prisma error throw korto ----
+            const result = await prisma.refreshToken.updateMany({
+                where: {
+                    tokenHash,
+                    revokedAt: null, // ---- already revoked thakle abar touch korbo na ----
+                },
+                data: {
+                    revokedAt: new Date(),
+                },
+            });
+
+            log.info(
+                { requestId, revokedCount: result.count },
+                result.count > 0 ? "Refresh token revoked on logout" : "Logout called with already-revoked or unknown token"
+            )
+        } else {
+            log.info({ requestId }, "Logout called without refresh token cookie");
+        }
+
+        const response = NextResponse.json({
+            status: "success",
+            requestId,
+            message: "Logged out successfully",
+        });
+
+        // ---- cookie clear korar sobcheye reliable way: maxAge 0 diye
+        // overwrite kora. delete() method o kaj kore, kintu path/options
+        // exact match na hole silently fail korte pare — tai explicit set kore
+        // maxAge 0 kora safer, deploy kora cookie exactly overwrite hobe ----
+        response.cookies.set("access_token", "", {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "lax",
+            path: "/",
+            maxAge: 0,
+        });
+
+        response.cookies.set("refresh_token", "", {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "lax",
+            path: "/api/auth", // ---- signup/login/refresh e যে path দিয়ে set korechilam, exact same path lagbe নাহলে browser ei cookie clear korbe na ----
+            maxAge: 0,
+        });
+
+        return response;
+
+    } catch (error) {
+        const { status, message } = handlePrismaError(error);
+        log.error(
+            {
+                requestId,
+                err: error instanceof Error
+                    ? { message: error.message, stack: error.stack, name: error.name }
+                    : String(error),
+            },
+            message
+        )
+        return NextResponse.json(
+            { status: "fail", requestId, message },
+            { status }
+        )
+    }
+}
 ```
 ---
